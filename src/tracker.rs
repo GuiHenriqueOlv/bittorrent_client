@@ -1,29 +1,48 @@
-﻿impl Tracker {
-    // ... código existente ...
+﻿use tokio::net::TcpListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex;
+use std::sync::Arc;
+use std::collections::HashSet;
 
-    pub async fn get_peers(&self) -> Result<Vec<Peer>, Box<dyn Error>> {
-        let request = TrackerRequest::new(6881);
-        
-        let url = format!(
-            "{}?peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
-            self.announce_url,
-            request.peer_id,
-            request.port,
-            request.uploaded,
-            request.downloaded,
-            request.left,
-            request.compact
-        );
+#[derive(Clone)]
+pub struct Tracker {
+    peers: Arc<Mutex<HashSet<String>>>,
+}
 
-        let client = reqwest::Client::new();
-        let response = client.get(&url).send().await?;
+impl Tracker {
+    pub fn new() -> Self {
+        Self {
+            peers: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
 
-        if response.status().is_success() {
-            let tracker_response: TrackerResponse = response.json().await?;
-            println!("Número de peers: {}", tracker_response.peers.len());
-            Ok(tracker_response.peers)
-        } else {
-            Err(Box::new(response.error_for_status().unwrap_err()))
+    /// Inicia o servidor tracker
+    pub async fn start(&self, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+        println!("Tracker rodando na porta {}", port);
+
+        loop {
+            let (mut socket, _) = listener.accept().await?;
+            let peers = Arc::clone(&self.peers);
+
+            tokio::spawn(async move {
+                let mut buffer = [0; 1024];
+                if let Ok(n) = socket.read(&mut buffer).await {
+                    let request = String::from_utf8_lossy(&buffer[..n]).to_string();
+
+                    if request.starts_with("REGISTER") {
+                        let peer_info = request[9..].to_string(); 
+                        peers.lock().await.insert(peer_info.clone());
+                        println!("Peer registrado: {}", peer_info);
+                    }
+
+                    if request.starts_with("GET_PEERS") {
+                        let peer_list: Vec<String> = peers.lock().await.iter().cloned().collect();
+                        let response = peer_list.join(",");
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                }
+            });
         }
     }
 }
