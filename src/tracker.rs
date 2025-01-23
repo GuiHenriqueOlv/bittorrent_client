@@ -3,6 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::collections::HashSet;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct Tracker {
@@ -41,7 +42,27 @@ impl Tracker {
                         let response = peer_list.join(",");
                         socket.write_all(response.as_bytes()).await.unwrap();
                     }
+
+                    if request.starts_with("UNREGISTER") {
+                        let peer_info = request[11..].to_string();
+                        peers.lock().await.remove(&peer_info);
+                        println!("Peer removido: {}", peer_info);
+                    }
                 }
+            });
+        }
+    }
+
+    /// Função para limpar a lista de peers desconectados periodicamente
+    pub async fn clean_up(&self) {
+        let peers = Arc::clone(&self.peers);
+        loop {
+            tokio::time::sleep(Duration::from_secs(10)).await; // Limpa a cada 10 segundos (ajuste conforme necessário)
+            let mut peers_locked = peers.lock().await;
+            peers_locked.retain(|peer| {
+                // Aqui você pode adicionar lógica para verificar se o peer está desconectado
+                // Exemplo: fazer uma tentativa de ping no peer ou outro critério
+                true // Para o exemplo, retém todos, ajuste conforme necessário
             });
         }
     }
