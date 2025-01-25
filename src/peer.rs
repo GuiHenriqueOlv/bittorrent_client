@@ -11,7 +11,7 @@ pub struct Peer {
     pub ip: String,
     pub port: u16,
     pub shared_files: Vec<String>,
-    pub name: String, // Nome do peer
+    pub name: String,
 }
 
 impl Peer {
@@ -24,7 +24,6 @@ impl Peer {
         }
     }
 
-    /// Registra este peer no tracker
     pub async fn register_with_tracker(&self, tracker_ip: &str, tracker_port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let mut stream = TcpStream::connect(format!("{}:{}", tracker_ip, tracker_port)).await?;
         let message = format!("REGISTER {}:{}", self.name, self.port);
@@ -33,7 +32,6 @@ impl Peer {
         Ok(())
     }
 
-    /// Desregistra este peer do tracker
     pub async fn unregister_from_tracker(&self, tracker_ip: &str, tracker_port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let mut stream = TcpStream::connect(format!("{}:{}", tracker_ip, tracker_port)).await?;
         let message = format!("UNREGISTER {}:{}", self.name, self.port);
@@ -42,7 +40,6 @@ impl Peer {
         Ok(())
     }
 
-    /// Obtém a lista de peers do tracker
     pub async fn get_peers_from_tracker(&self, tracker_ip: &str, tracker_port: u16) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let mut stream = TcpStream::connect(format!("{}:{}", tracker_ip, tracker_port)).await?;
         stream.write_all(b"GET_PEERS").await?;
@@ -54,24 +51,51 @@ impl Peer {
         Ok(peers)
     }
 
-    /// Inicia um chat com outro peer
-    pub async fn start_chat(&self, target_peer: String) -> Result<(), Box<dyn std::error::Error>> {
-        let mut stream = TcpStream::connect(target_peer.clone()).await?;
-        println!("Conectado ao peer {}. Digite sua mensagem:", target_peer);
+    pub async fn start_chat_server(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let chat_port = self.port + 1000;
+        let listener = TcpListener::bind(format!("{}:{}", self.ip, chat_port)).await?;
+        println!("Servidor de chat rodando na porta {}", chat_port);
+
+        loop {
+            let (mut socket, _) = listener.accept().await?;
+            let peer_name = self.name.clone();
+
+            tokio::spawn(async move {
+                let mut buffer = [0; 1024];
+                match socket.read(&mut buffer).await {
+                    Ok(n) if n > 0 => {
+                        let message = String::from_utf8_lossy(&buffer[..n]);
+                        println!("📩 Mensagem recebida para {}: {}", peer_name, message);
+                    },
+                    _ => println!("❌ Conexão de chat encerrada"),
+                }
+            });
+        }
+    }
+
+    pub async fn start_chat(&self, target_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+        let target_chat_port = target_port + 1000;
+        let target_address = format!("127.0.0.1:{}", target_chat_port);
+        let mut stream = TcpStream::connect(target_address).await?;
+
+        println!("🗨️ Conectado ao peer na porta {}. Digite suas mensagens (digite 'exit' para sair):", target_chat_port);
+
         loop {
             let mut message = String::new();
             std::io::stdin().read_line(&mut message).unwrap();
-            let message = message.trim().to_string();
+            let message = format!("{}: {}", self.name, message.trim());
 
-            if message == "exit" {
+            if message.contains("exit") {
+                println!("🚪 Saindo do chat...");
                 break;
             }
+
             stream.write_all(message.as_bytes()).await?;
         }
+
         Ok(())
     }
 
-    /// Inicia o servidor do peer
     pub async fn start_server(&self) -> Result<(), Box<dyn std::error::Error>> {
         let listener = TcpListener::bind(format!("{}:{}", self.ip, self.port)).await?;
         println!("Peer rodando em {}:{}", self.ip, self.port);
@@ -114,7 +138,6 @@ impl Peer {
     }
 }
 
-/// Lista arquivos locais
 pub fn list_local_files(directory: &str) -> Vec<String> {
     let mut files = Vec::new();
     if let Ok(entries) = read_dir(directory) {
